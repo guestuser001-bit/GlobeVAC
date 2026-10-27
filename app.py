@@ -11,7 +11,7 @@ GREEN = "#126B3B"
 PALETTE = ["#0E5533","#3F9B57","#7DCB76","#A7DCA8","#59B9D4","#D5E5D8","#E5B961"]
 st.markdown("""
 <style>
-.stApp {background:#F8FAF8;color:#14251D}
+.stApp {background:#F8FAF9;color:#14251D}
 [data-testid="stSidebar"] {background:#010100!important}
 [data-testid="stSidebar"] * {color:#F4FFF7!important}
 [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {background:transparent}
@@ -19,13 +19,13 @@ st.markdown("""
 [data-testid="stSidebar"] [data-testid="stImage"] img {border-radius:10px}
 [data-testid="stSidebar"] a {color:#89E79B!important}
 [data-testid="stSidebar"] [data-testid="stImage"] {padding:8px 0 12px}
-.block-container {padding-top:1.35rem;max-width:1600px}
+.block-container {padding-top:1.35rem;max-width:1480px}
 h1 {font-size:2.5rem!important;letter-spacing:-.045em}
 h2,h3 {color:#153F2C!important}
 [data-testid="stMetric"] {background:white;border:1px solid #E3EAE5;border-radius:14px;padding:18px}
 [data-testid="stMetricLabel"] {font-size:14px}
 div[data-testid="stPlotlyChart"] {background:#fff;border:1px solid #E3EAE5;border-radius:14px;padding:12px}
-[data-baseweb="tab-list"] {gap:16px}
+[data-baseweb="tab-list"] {gap:19px}
 [data-baseweb="tab"] {font-weight:700}
 .stButton>button[kind="primary"], .stDownloadButton>button {background:#125F38;color:white;border-radius:9px}
 .gv-hero {padding:32px 30px;border-radius:16px;background:linear-gradient(105deg,#fff 0%,#fff 60%,#E8F4EC 100%);border:1px solid #E1EAE4;margin-bottom:18px}
@@ -179,7 +179,7 @@ view["pH group"]=view["storage_buffer_pH"].map(ph_bucket)
 view["Storage signal"]=view.apply(stability_signal,axis=1)
 view["Formulation signal"]=view.apply(formulation_signal,axis=1)
 
-tabs=st.tabs(["📊 Overview","🧪 Product catalog","🏭 Suppliers & formulation","💡 Key takeaways","🔎 Data quality"])
+tabs=st.tabs(["Database overview","Storage & formulation","Products","Suppliers & formulation","Research priorities","Compare products","Key takeaways","Data quality"])
 
 with tabs[0]:
     st.subheader("Portfolio at a glance")
@@ -192,7 +192,10 @@ with tabs[0]:
         ("pH reported",int(view.storage_buffer_pH.map(has_value).sum()))
     ]
     for col,(label,val) in zip(k,metrics):col.metric(label,int(val))
-    st.caption("Figures reflect current filters and refer to extracted records, not verified manufacturer claims.")
+    st.caption("A clear view of the currently filtered research dataset. All figures are extracted-data indicators, not verified manufacturer claims.")
+    if len(view):
+        completeness = round(100 * view.storage_buffer_pH.map(has_value).mean())
+        st.progress(completeness/100, text=f"pH field coverage in current selection · {completeness}%")
     left,right=st.columns(2)
     with left:
         counts=view.temperature_group.value_counts()
@@ -251,6 +254,125 @@ with tabs[0]:
   </div>
 </div>""",unsafe_allow_html=True)
 
+
+# Database overview: use the entire extracted dataset, not only formulation-complete records.
+# Stable IDs are deterministic within the current normalized input. Manufacturer/catalog identity
+# should be reconciled across source systems before treating IDs as persistent database keys.
+import hashlib
+
+def product_category(name):
+    n=str(name).lower()
+    if "vaccine" in n:return "Vaccine"
+    if "antibod" in n or "monoclonal" in n or "polyclonal" in n or re.search(r"\bmab\b",n):return "Antibody"
+    if "recombinant" in n and "protein" in n:return "Recombinant protein"
+    if "antigen" in n:return "Antigen"
+    if "protein" in n:return "Protein / other"
+    return "Other / review"
+
+def storage_class(v):
+    """Conservative text classification; multi-temperature instructions are review-needed."""
+    raw=str(v).strip()
+    if not has_value(raw):return "Uncertain / review needed"
+    t=raw.lower().replace("−","-").replace("–","-").replace("º","°")
+    if re.search(r"(?:-80|-70|-60|-50)\s*°?\s*c",t):
+        if re.search(r"(?:-20|-30|2\s*-\s*8|\b4\s*°?\s*c|\broom temperature\b)",t):
+            return "Uncertain / review needed"
+        return "Ultra-low temperature"
+    if re.search(r"(?:-20|-25|-30|-40)\s*°?\s*c",t):
+        if re.search(r"(?:2\s*-\s*8|\b4\s*°?\s*c|\broom temperature\b)",t):
+            return "Uncertain / review needed"
+        return "Frozen"
+    if re.search(r"(?:2\s*-\s*8|2\s*to\s*8|\b4\s*°?\s*c|\b5\s*°?\s*c)",t):
+        if "room temperature" in t:return "Uncertain / review needed"
+        return "Refrigerated"
+    if re.search(r"(?:room temperature|ambient|20\s*-\s*25\s*°?\s*c)",t):
+        return "Ambient"
+    if re.search(r"(?:°\s*c|degrees celsius)",t):
+        return "Other controlled temperature"
+    return "Uncertain / review needed"
+
+def stable_key(row):
+    import unicodedata
+    # A provisional deterministic identifier; not a verified catalog ID.
+    fields=[str(row.get(k,"")).strip().casefold() for k in ("manufacturer","product","uniprot_id")]
+    key="|".join(fields)
+    return "GV-"+hashlib.sha1(key.encode("utf-8")).hexdigest()[:10].upper()
+
+database=df.copy()
+database["Product ID"]=database.apply(stable_key,axis=1)
+database["Product category"]=database["product"].map(product_category)
+database["Storage classification"]=database["storage_temperature"].map(storage_class)
+database["Record status"]=database["product"].map(lambda v:"Product-like (unverified)" if is_product(v) else "Review / non-product")
+database["Source available"]=database["source"].map(has_value)
+database["Temperature available"]=database["storage_temperature"].map(has_value)
+database["Formulation available"]=database["storage_buffer"].map(has_value)|database["storage_buffer_pH"].map(has_value)
+# The source CSV does not contain reliable shipping-temperature, geographic market,
+# demand or catalog-number columns. Do not infer those values.
+database["Shipping temperature"]="Not collected"
+database["Market / country"]="Not collected"
+database["Catalog number"]="Not collected"
+database["Evidence status"]="Source linked · unverified"
+database.loc[~database["Source available"],"Evidence status"]="Source missing · review"
+
+with tabs[0]:
+    st.markdown("### Global cold-chain product database")
+    st.write("A searchable research inventory of biologics, vaccines, proteins and antibodies, designed to connect product identities, suppliers, storage requirements and future market intelligence.")
+    st.caption("Scope: the full imported CSV. The existing Storage & formulation and Products tabs focus on a narrower, formulation-qualified subset.")
+    c1,c2,c3,c4,c5=st.columns(5)
+    c1.metric("Extracted records",len(database))
+    c2.metric("Distinct product IDs",database["Product ID"].nunique())
+    c3.metric("Named suppliers",database.loc[database.manufacturer.map(has_value),"manufacturer"].nunique())
+    c4.metric("Storage stated",int(database["Temperature available"].sum()))
+    c5.metric("Source links",int(database["Source available"].sum()))
+    st.markdown("#### Storage classification")
+    st.caption("Storage classifications are conservative screening labels derived from extracted storage text. Mixed conditions are flagged for review. Shipping and handling requirements are not inferred.")
+    left,right=st.columns(2)
+    with left:
+        order=["Refrigerated","Frozen","Ultra-low temperature","Other controlled temperature","Ambient","Uncertain / review needed"]
+        cnt=database["Storage classification"].value_counts().reindex(order,fill_value=0)
+        fig=go.Figure(go.Bar(y=cnt.index,x=cnt.values,orientation="h",marker_color=["#62B77A","#23834E","#124A35","#7CBCC0","#B2CBB8","#C9D1CD"],text=cnt.values,textposition="outside"))
+        fig.update_layout(title="Storage classes across imported records",xaxis_title="Records",yaxis_title="",yaxis=dict(autorange="reversed"))
+        st.plotly_chart(chart_layout(fig),use_container_width=True)
+    with right:
+        cat=database["Product category"].value_counts().sort_values()
+        fig=go.Figure(go.Bar(y=cat.index,x=cat.values,orientation="h",marker_color="#469A69",text=cat.values,textposition="outside"))
+        fig.update_layout(title="Product categories (name-derived)",xaxis_title="Records",yaxis_title="")
+        st.plotly_chart(chart_layout(fig),use_container_width=True)
+    st.markdown("#### Market discovery snapshot")
+    st.write("This is a **supplier and product-coverage view**, not a market-size estimate. The current CSV does not contain reliable country coverage, market demand, revenue, or shipping-temperature data.")
+    supplier_stats=(database.assign(Supplier=database["manufacturer"].where(database["manufacturer"].map(has_value),"Unknown"))
+        .groupby("Supplier",as_index=False)
+        .agg(Records=("Product ID","size"),Products=("Product ID","nunique"),
+             Storage_reported=("Temperature available","sum"),Sources_linked=("Source available","sum"))
+        .sort_values(["Products","Supplier"],ascending=[False,True]))
+    st.dataframe(supplier_stats.rename(columns={"Storage_reported":"Storage stated","Sources_linked":"Source linked"}),hide_index=True,use_container_width=True,height=230)
+    st.markdown("#### Searchable product registry")
+    search_all=st.text_input("Search the full database",placeholder="Product, supplier or protein",key="full_database_search")
+    reg=database.copy()
+    if search_all:
+        needle=re.escape(search_all)
+        reg=reg[reg["product"].str.contains(needle,case=False,na=False)|
+                reg["manufacturer"].str.contains(needle,case=False,na=False)|
+                reg["protein"].str.contains(needle,case=False,na=False)]
+    registry=reg.rename(columns={"product":"Product","manufacturer":"Supplier",
+       "storage_temperature":"Storage requirement","source":"Source URL"})
+    registry_cols=["Product ID","Product","Supplier","Catalog number","Product category",
+                   "Storage classification","Storage requirement","Shipping temperature",
+                   "Market / country","Evidence status","Source URL"]
+    st.dataframe(registry[registry_cols].fillna(""),hide_index=True,use_container_width=True,height=340,
+        column_config={"Source URL":st.column_config.LinkColumn("Source URL",display_text="Open source")})
+    export_csv(registry[registry_cols],"GlobeVAC_product_registry.csv","⬇ Export full product registry")
+    with st.expander("Evidence, traceability and next data improvements"):
+        st.markdown("""
+**Current data:** original storage text, source links, buffer/pH fields and some evidence fields are preserved in the CSV. Product IDs are deterministic provisional keys, not manufacturer-issued catalog identifiers.
+
+**To collect next:** catalog numbers, manufacturer-confirmed product IDs, product-level source citations and PDF page numbers, evidence extraction date, independent verification status, separate shipping/handling temperatures, and market/country availability.
+
+**Priority workflow:** verify products → normalize suppliers → confirm storage classes → add shipping evidence → expand geography → integrate independently sourced market demand and commercial estimates.
+""")
+        st.dataframe(database[[c for c in ["Product ID","product","storage_evidence","evidence_page","evidence_category","source_type","source"] if c in database]],hide_index=True,use_container_width=True,height=220)
+    st.info("A product being stored cold does not, by itself, prove that it must be shipped cold. Market opportunities and cold-chain dependency require product-specific verification.")
+
 with tabs[1]:
     st.subheader(f"Product catalog · {len(view)} records")
     st.write("Only identifiable products with a temperature and either a buffer or pH field are shown. Missing details are marked with a dash rather than guessed.")
@@ -301,7 +423,64 @@ with tabs[2]:
     show_table(evidence,list(evidence.columns),height=360)
     export_csv(evidence,"globevac_formulation_matrix.csv","⬇ Export formulation matrix")
 
+
 with tabs[3]:
+    st.subheader("Research priorities")
+    st.caption("A practical queue of records to verify next. These are evidence-based screening labels, not commercial opportunity scores.")
+    if view.empty:
+        st.info("No products match the current filters.")
+    else:
+        priority=view.copy()
+        priority["Verification focus"] = priority.apply(
+            lambda r: "Confirm frozen-storage requirements" if r["temperature_group"]=="Frozen (≤ −20°C)"
+            else ("Confirm refrigerated-storage requirements" if r["temperature_group"]=="Refrigerated (2–8°C)"
+                  else "Clarify temperature wording"),axis=1)
+        priority["Formulation follow-up"] = priority.apply(
+            lambda r: "Verify pH and buffer context" if has_value(r["storage_buffer_pH"])
+            else "Request or locate formulation pH",axis=1)
+        priority["Source available"] = priority["source"].map(lambda v:"Yes" if str(v).startswith(("http://","https://")) else "Check")
+        st.markdown("#### Records to investigate")
+        priority_table=priority[["product","manufacturer","storage_temperature","buffer_system","Verification focus","Formulation follow-up","Source available"]].copy()
+        priority_table.columns=["Product","Supplier","Storage temperature","Buffer system","Storage follow-up","Formulation follow-up","Source link"]
+        st.dataframe(priority_table,hide_index=True,use_container_width=True,height=420)
+        export_csv(priority_table,"globevac_research_priorities.csv","⬇ Export research priorities")
+        st.markdown("#### Research workflow")
+        c1,c2,c3=st.columns(3)
+        with c1:
+            st.markdown("**01 · Validate**")
+            st.caption("Check product identity, storage wording, and formulation values against original supplier datasheets.")
+        with c2:
+            st.markdown("**02 · Understand**")
+            st.caption("Identify whether the temperature reflects shipping, long-term storage, or post-reconstitution conditions.")
+        with c3:
+            st.markdown("**03 · Prioritize**")
+            st.caption("Select technically relevant formulations for stability discussions and further research.")
+
+with tabs[4]:
+    st.subheader("Compare products")
+    st.caption("Choose up to three records to compare the reported formulation and storage fields side by side.")
+    if view.empty:
+        st.info("No products available for comparison under the current filters.")
+    else:
+        choices=view.reset_index(drop=True).copy()
+        choices["display"] = choices["product"].astype(str)+" · "+choices["manufacturer"].astype(str)+" · #"+(choices.index+1).astype(str)
+        selected=st.multiselect("Products to compare",choices["display"].tolist(),default=choices["display"].head(min(2,len(choices))).tolist(),max_selections=3)
+        if selected:
+            comp=choices[choices["display"].isin(selected)].copy()
+            rows=[("Product","product"),( "Supplier","manufacturer"),("Associated protein","protein"),
+                  ("Storage temperature","storage_temperature"),("Buffer classification","buffer_system"),
+                  ("Extracted buffer text","storage_buffer"),("Extracted pH","storage_buffer_pH"),
+                  ("Storage notes","storage_notes"),("Source","source")]
+            comparison=pd.DataFrame({"Attribute":[a for a,_ in rows]})
+            for _,record in comp.iterrows():
+                comparison[record["display"]] = [str(record.get(col,"")).strip() or "—" for _,col in rows]
+            st.dataframe(comparison,hide_index=True,use_container_width=True,height=390)
+            export_csv(comparison,"globevac_product_comparison.csv","⬇ Export comparison")
+        else:
+            st.info("Select one or more products above.")
+        st.caption("Side-by-side values are extracted source text; they may refer to different storage stages or contexts.")
+
+with tabs[5]:
     st.subheader("Key takeaways")
     st.write("Automatically generated observations from the currently filtered data. These are research signals, not validated product claims.")
     total=len(view)
@@ -340,7 +519,7 @@ with tabs[3]:
 """)
         st.caption("No commercial opportunity score is assigned: the CSV does not establish supplier needs, sales potential, or validated instability.")
 
-with tabs[4]:
+with tabs[6]:
     st.subheader("Data quality & review")
     a,b,c,d=st.columns(4)
     for col,label,val in zip([a,b,c,d],
