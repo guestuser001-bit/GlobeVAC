@@ -74,9 +74,16 @@ def buffer_system(v):
     return "Other / unspecified" if has_value(v) else "Not reported"
 
 def temp_class(v):
-    v=str(v)
-    if re.search(r"(?<!\d)[−-]\s*(?:20|25|30|40|50|60|70|80)\s*°?\s*C",v,re.I):return "Frozen (≤ −20°C)"
-    if re.search(r"(?:\b[234568]\s*°\s*C|2\s*(?:-|–|to)\s*8\s*°?\s*C)",v,re.I):return "Refrigerated (2–8°C)"
+    v=str(v).replace("−", "-").replace("–", "-")
+    # Check ultra-low temperatures first so -70/-80°C are not classified as frozen.
+    if re.search(r"(?<!\d)-\s*(?:50|60|70|80|90)\s*°?\s*C",v,re.I):
+        return "Ultra-low temperature"
+    if re.search(r"(?<!\d)-\s*(?:20|25|30|40)\s*°?\s*C",v,re.I):
+        return "Frozen (≤ −20°C)"
+    if re.search(r"(?:\b[234568]\s*°\s*C|2\s*(?:-|to)\s*8\s*°?\s*C)",v,re.I):
+        return "Refrigerated (2–8°C)"
+    if re.search(r"(?:ambient|room temperature|\b(?:20|22|25)\s*°?\s*C)",v,re.I):
+        return "Ambient"
     return "Other / unclear"
 
 def ph_number(v):
@@ -199,6 +206,8 @@ with tabs[0]:
     left,right=st.columns(2)
     with left:
         counts=view.temperature_group.value_counts()
+        counts=counts.reindex(["Refrigerated (2–8°C)","Frozen (≤ −20°C)","Ultra-low temperature","Ambient"],fill_value=0)
+        counts=counts[counts>0]
         fig=go.Figure(go.Pie(labels=counts.index,values=counts.values,hole=.64,
                              marker_colors=PALETTE,textinfo="percent"))
         fig.update_layout(title="Storage temperature distribution")
@@ -211,11 +220,11 @@ with tabs[0]:
         st.plotly_chart(chart_layout(fig),use_container_width=True)
     left,right=st.columns(2)
     with left:
-        order=["< 6.0","6.0–6.9","7.0–7.9","8.0–8.9","≥ 9.0","Not reported"]
+        order=["< 6.0","6.0–6.9","7.0–7.9","8.0–8.9","≥ 9.0"]
         counts=view["pH group"].value_counts().reindex(order,fill_value=0)
         fig=go.Figure(go.Bar(x=counts.index,y=counts.values,marker_color="#5EBB79",
                              text=counts.values,textposition="outside"))
-        fig.update_layout(title="pH distribution (reported vs missing)",yaxis_title="Product records")
+        fig.update_layout(title="pH distribution",yaxis_title="Product records")
         st.plotly_chart(chart_layout(fig),use_container_width=True)
     with right:
         counts=view.manufacturer.replace("","Unknown").value_counts()
@@ -328,9 +337,9 @@ with tabs[0]:
     st.caption("Storage classifications are conservative screening labels derived from extracted storage text. Mixed conditions are flagged for review. Shipping and handling requirements are not inferred.")
     left,right=st.columns(2)
     with left:
-        order=["Refrigerated","Frozen","Ultra-low temperature","Other controlled temperature","Ambient","Uncertain / review needed"]
+        order=["Refrigerated","Frozen","Ultra-low temperature","Ambient"]
         cnt=database["Storage classification"].value_counts().reindex(order,fill_value=0)
-        fig=go.Figure(go.Bar(y=cnt.index,x=cnt.values,orientation="h",marker_color=["#62B77A","#23834E","#124A35","#7CBCC0","#B2CBB8","#C9D1CD"],text=cnt.values,textposition="outside"))
+        fig=go.Figure(go.Bar(y=cnt.index,x=cnt.values,orientation="h",marker_color=["#62B77A","#23834E","#124A35","#B2CBB8"],text=cnt.values,textposition="outside"))
         fig.update_layout(title="Storage classes across imported records",xaxis_title="Records",yaxis_title="",yaxis=dict(autorange="reversed"))
         st.plotly_chart(chart_layout(fig),use_container_width=True)
     with right:
