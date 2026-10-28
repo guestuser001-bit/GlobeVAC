@@ -5,9 +5,14 @@ from pathlib import Path
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import os
 
 ROOT = Path(__file__).resolve().parent
-st.set_page_config(page_title="GlobeVAC | Biological Product Intelligence", page_icon="🌍", layout="wide", initial_sidebar_state="expanded")
+# Derive the displayed version from the containing folder name.
+_version_match = re.search(r"(?:^|-)v(\d+(?:[-.]\d+)*)$", ROOT.name, re.IGNORECASE)
+APP_VERSION = f"v{_version_match.group(1)}" if _version_match else "version unknown"
+
+st.set_page_config(page_title="GlobeVAC | Advancing Vaccine Thermostability", page_icon="🌍", layout="wide", initial_sidebar_state="expanded")
 GREEN = "#126B3B"
 PALETTE = ["#0E5533","#3F9B57","#7DCB76","#A7DCA8","#59B9D4","#D5E5D8","#E5B961"]
 st.markdown("""
@@ -205,7 +210,7 @@ with st.sidebar:
     if st.button("🌍  GlobeVAC", key="logo_home", use_container_width=True, type="primary"):
         navigate("Home")
         st.rerun()
-    st.caption("BIOLOGICAL PRODUCT INTELLIGENCE  ·  v7.3")
+    st.caption(f"Advancing Vaccine Thermostability · zj · {APP_VERSION}")
     st.divider()
     st.caption("WORKSPACES")
     for group, pages in NAV_GROUPS.items():
@@ -229,20 +234,37 @@ query=""
 if page not in ("Home", "Database overview"):
     with st.sidebar:
         st.divider()
-        st.markdown("**Filter this research view**")
-        query=st.text_input("Search products or proteins",placeholder="Search by name…",key="research_query")
+        st.markdown("**🔎 Search & filter**")
+        query=st.text_input(
+            "Find a product or protein", placeholder="Type a name to search…",
+            key="research_query", help="Searches product and protein names."
+        )
         suppliers=sorted(x for x in products.manufacturer.dropna().unique() if x)
-        selected_suppliers=st.multiselect("Supplier (optional)",suppliers,placeholder="All suppliers",key="research_suppliers")
-        with st.expander("Advanced filters",expanded=False):
-            buffers=sorted(products.buffer_system.dropna().unique())
-            selected_buffers=st.multiselect("Buffer system",buffers,placeholder="All buffers",key="research_buffers")
-            temp_groups=sorted(products.temperature_group.dropna().unique())
-            selected_temp=st.multiselect("Temperature category",temp_groups,placeholder="All temperatures",key="research_temps")
-            ph_only=st.checkbox("Only records with pH",key="research_ph_only")
-        if st.button("Clear research filters",use_container_width=True,key="clear_research_filters"):
-            for k in ("research_query","research_suppliers","research_buffers","research_temps","research_ph_only"):
-                st.session_state.pop(k,None)
-            st.rerun()
+        buffers=sorted(x for x in products.buffer_system.dropna().unique() if x)
+        temp_groups=sorted(x for x in products.temperature_group.dropna().unique() if x)
+        active_count=(bool(query.strip()) + bool(st.session_state.get("research_suppliers"))
+                      + bool(st.session_state.get("research_buffers"))
+                      + bool(st.session_state.get("research_temps"))
+                      + bool(st.session_state.get("research_ph_only",False)))
+        with st.expander(f"⚙️ Refine results" + (f" · {active_count} active" if active_count else ""), expanded=False):
+            selected_suppliers=st.multiselect(
+                "Supplier", suppliers, placeholder="Any supplier", key="research_suppliers"
+            )
+            selected_buffers=st.multiselect(
+                "Buffer system", buffers, placeholder="Any buffer", key="research_buffers"
+            )
+            selected_temp=st.multiselect(
+                "Storage temperature", temp_groups, placeholder="Any temperature", key="research_temps"
+            )
+            ph_only=st.checkbox("Only show records with pH data",key="research_ph_only")
+        if active_count:
+            if st.button("↺ Reset all filters",use_container_width=True,key="clear_research_filters"):
+                for k in ("research_query","research_suppliers","research_buffers","research_temps","research_ph_only"):
+                    st.session_state.pop(k,None)
+                st.rerun()
+        else:
+            st.caption("Showing all research records · add filters to narrow results")
+
 view=products.copy()
 if selected_suppliers:view=view[view.manufacturer.isin(selected_suppliers)]
 if selected_buffers:view=view[view.buffer_system.isin(selected_buffers)]
@@ -251,6 +273,11 @@ if ph_only:view=view[view.storage_buffer_pH.map(has_value)]
 if query:
     q=re.escape(query)
     view=view[view["product"].str.contains(q,case=False,na=False)|view["protein"].str.contains(q,case=False,na=False)]
+if page not in ("Home", "Database overview"):
+    with st.sidebar:
+        st.caption(f"**{len(view):,}** of **{len(products):,}** products match")
+        if view.empty:
+            st.info("No matches. Try a shorter search or reset the filters.")
 
 
 def chart_layout(fig):
@@ -308,7 +335,7 @@ view["Formulation signal"]=view.apply(formulation_signal,axis=1)
 if page != "Home":
     st.markdown(f"<div class='gv-eyebrow'>GlobeVAC / {page.upper()}</div>", unsafe_allow_html=True)
     st.title(page)
-    st.caption("Biological product intelligence · Source-based research data")
+    st.caption("Advancing Vaccine Thermostability · Source-based research data")
 
 if page == 'Storage & formulation':
     st.subheader("Portfolio at a glance")
@@ -864,4 +891,4 @@ if page == 'Evidence Confidence':
     st.dataframe(evidence[cols],hide_index=True,use_container_width=True,height=360,column_config={"source":st.column_config.LinkColumn("Source",display_text="Open source")})
     export_csv(evidence[cols],"GlobeVAC_evidence_review.csv","Export evidence review queue")
 
-st.markdown('<p class="gv-foot">GlobeVAC · Biological Product Intelligence · Extracted data requires manufacturer validation</p>',unsafe_allow_html=True)
+st.markdown('<p class="gv-foot">GlobeVAC · Advancing Vaccine Thermostability · Extracted data requires manufacturer validation</p>',unsafe_allow_html=True)
